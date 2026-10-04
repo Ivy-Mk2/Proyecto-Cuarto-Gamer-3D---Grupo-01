@@ -1,5 +1,6 @@
 #include <GL/freeglut.h>
 #include <GL/glext.h>
+#include <mmsystem.h>
 #include <cmath>
 #include <cstring>
 #include <cstdlib>
@@ -42,6 +43,10 @@ const float SWITCH_X   = -2.0f, SWITCH_Y = 1.3f;
 const float TROPHY_X   = 1.1f,  TROPHY_Z = 0.55f;
 const float SEAT_X     = 0.0f,  SEAT_Z   = 1.75f;   // silla frente al monitor
 const float SEATED_EYE = 1.3f;
+
+// Hueco de la ventana en la pared derecha y nivel de la calle exterior
+const float WIN_Z0 = -1.4f, WIN_Z1 = 1.4f, WIN_Y0 = 0.9f, WIN_Y1 = 3.2f;
+const float STREET_Y = -4.0f;    // la habitacion esta en un primer piso
 
 // Entrada
 bool keys[256];
@@ -133,8 +138,8 @@ Box chairBox() { return makeBox(chairX, 0.8f, chairZ, 0.7f, 1.6f, 0.72f); }
 int getObstacles(Box out[]) {
     int n = 0;
     out[n++] = makeBox( 0.0f, 0.4f,   0.5f, 3.2f, 0.8f,  1.4f);   // escritorio
-    out[n++] = makeBox(-4.7f, 1.15f,  0.0f, 0.4f, 2.3f,  2.4f);   // libreros laterales
-    out[n++] = makeBox( 4.7f, 1.15f,  0.0f, 0.4f, 2.3f,  2.4f);
+    out[n++] = makeBox(-4.7f, 1.15f,  0.0f, 0.4f, 2.3f,  2.4f);   // librero izquierdo
+    out[n++] = makeBox( 1.25f, 1.15f, 3.68f, 2.4f, 2.3f, 0.4f);   // librero de la pared frontal
     out[n++] = makeBox(-3.2f, 2.33f, -3.7f, 1.8f, 1.12f, 0.35f);  // estantes de pared con libros
     out[n++] = makeBox( 3.2f, 2.63f, -3.7f, 1.8f, 0.52f, 0.35f);
     out[n++] = chairBox();
@@ -448,14 +453,57 @@ bool loadOBJ(const char* path, GLuint& list) {
     return true;
 }
 
-// Busca el modelo junto al .exe y, si no esta, en el directorio actual
-void loadTrophy(const char* argv0) {
-    std::string dir(argv0);
-    size_t cut = dir.find_last_of("\\/");
-    dir = (cut == std::string::npos) ? "" : dir.substr(0, cut + 1);
-    if (!loadOBJ((dir + "models/trofeo.obj").c_str(), trophyList) &&
-        !loadOBJ("models/trofeo.obj", trophyList))
+std::string exeDir;   // carpeta del .exe, para encontrar models/ y audio/
+
+// Prefiere el archivo junto al .exe; si no existe, usa la ruta relativa al directorio actual
+std::string assetPath(const char* rel) {
+    std::string p = exeDir + rel;
+    FILE* f = fopen(p.c_str(), "rb");
+    if (!f) return rel;
+    fclose(f);
+    return p;
+}
+
+void loadTrophy() {
+    if (!loadOBJ(assetPath("models/trofeo.obj").c_str(), trophyList))
         fprintf(stderr, "Aviso: no se encontro models/trofeo.obj\n");
+}
+
+// ======================================================================
+//  AUDIO
+//  MCI de Windows (winmm) reproduce MP3/WAV sin librerias externas.
+//  Si un archivo no existe, el juego sigue sin ese sonido.
+// ======================================================================
+
+bool gameMusicReady = false, victoryReady = false;
+
+bool openSound(const char* rel, const char* alias) {
+    std::string cmd = "open \"" + assetPath(rel) + "\" type mpegvideo alias " + alias;
+    if (mciSendStringA(cmd.c_str(), NULL, 0, NULL) == 0) return true;
+    fprintf(stderr, "Aviso: no se pudo abrir %s (se omite ese sonido)\n", rel);
+    return false;
+}
+
+void initAudio() {
+    gameMusicReady = openSound("audio/DJVI - Dry Out.mp3", "juego");
+    victoryReady   = openSound("audio/super mario - soundtrak monedas.mp3", "victoria");
+}
+
+// Musica del minijuego del monitor (en bucle)
+void playGameMusic() {
+    if (victoryReady)   mciSendStringA("stop victoria", NULL, 0, NULL);
+    if (gameMusicReady) mciSendStringA("play juego from 0 repeat", NULL, 0, NULL);
+}
+
+void stopAllMusic() {
+    if (gameMusicReady) mciSendStringA("stop juego", NULL, 0, NULL);
+    if (victoryReady)   mciSendStringA("stop victoria", NULL, 0, NULL);
+}
+
+// Al completar la mision se corta la musica del juego y suenan las monedas
+void playVictoryMusic() {
+    if (gameMusicReady) mciSendStringA("stop juego", NULL, 0, NULL);
+    if (victoryReady)   mciSendStringA("play victoria from 0", NULL, 0, NULL);
 }
 
 // ======================================================================
@@ -539,13 +587,14 @@ void drawRoom() {
         drawCube(1.0f);
     glPopMatrix();
 
-    // Pared derecha
+    // Pared derecha, armada en 4 piezas alrededor del hueco de la ventana
     roomColor(0.32f, 0.26f, 0.20f);
-    glPushMatrix();
-        glTranslatef(5.0f, 2.0f, 0.0f);
-        glScalef(0.15f, 4.0f, 8.0f);
-        drawCube(1.0f);
-    glPopMatrix();
+    drawBox(5.0f, WIN_Y0 / 2, 0.0f, 0.15f, WIN_Y0, 8.0f);                       // debajo
+    drawBox(5.0f, (WIN_Y1 + 4.0f) / 2, 0.0f, 0.15f, 4.0f - WIN_Y1, 8.0f);      // encima
+    drawBox(5.0f, (WIN_Y0 + WIN_Y1) / 2, (WIN_Z0 - 4.0f) / 2,
+            0.15f, WIN_Y1 - WIN_Y0, WIN_Z0 + 4.0f);                             // hacia el fondo
+    drawBox(5.0f, (WIN_Y0 + WIN_Y1) / 2, (WIN_Z1 + 4.0f) / 2,
+            0.15f, WIN_Y1 - WIN_Y0, 4.0f - WIN_Z1);                             // hacia el frente
 
     // Techo
     roomColor(0.12f, 0.12f, 0.15f);
@@ -1050,6 +1099,358 @@ void setupLights() {
 }
 
 // ======================================================================
+//  VENTANA Y LIBRERO REUBICADO
+// ======================================================================
+
+void drawWindowFrame() {
+    const float zc = (WIN_Z0 + WIN_Z1) / 2, yc = (WIN_Y0 + WIN_Y1) / 2;
+    const float w = WIN_Z1 - WIN_Z0, h = WIN_Y1 - WIN_Y0;
+    glDisable(GL_LIGHTING);
+    glColor3f(0.10f, 0.10f, 0.14f);
+    drawBox(5.0f, WIN_Y1 - 0.03f, zc, 0.17f, 0.06f, w);           // dintel
+    drawBox(5.0f, yc, WIN_Z0 + 0.03f, 0.17f, h, 0.06f);           // jambas
+    drawBox(5.0f, yc, WIN_Z1 - 0.03f, 0.17f, h, 0.06f);
+    drawBox(5.0f, yc, zc, 0.06f, h, 0.04f);                       // division central
+    glColor3f(0.16f, 0.16f, 0.20f);
+    drawBox(4.96f, WIN_Y0 + 0.03f, zc, 0.26f, 0.06f, w + 0.1f);   // alfeizar
+    glEnable(GL_LIGHTING);
+}
+
+// Contorno neon magenta de la ventana (dentro de beginGlow/endGlow)
+void drawWindowNeon() {
+    const float x = ROOM_MAX_X - 0.01f, t = 0.04f;
+    const float zc = (WIN_Z0 + WIN_Z1) / 2, yc = (WIN_Y0 + WIN_Y1) / 2;
+    glowColor(1.0f, 0.25f, 0.75f);
+    drawBox(x, WIN_Y1 + t / 2, zc, t, t, WIN_Z1 - WIN_Z0 + 2 * t);
+    drawBox(x, yc, WIN_Z0 - t / 2, t, WIN_Y1 - WIN_Y0, t);
+    drawBox(x, yc, WIN_Z1 + t / 2, t, WIN_Y1 - WIN_Y0, t);
+}
+
+// Vidrio translucido (pasada transparente)
+void drawWindowGlass() {
+    glDisable(GL_LIGHTING);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDepthMask(GL_FALSE);
+    glBegin(GL_QUADS);
+        glColor4f(0.55f, 0.75f, 1.0f, 0.08f);
+        glVertex3f(5.0f, WIN_Y0, WIN_Z0);
+        glVertex3f(5.0f, WIN_Y0, WIN_Z1);
+        glColor4f(0.75f, 0.85f, 1.0f, 0.16f);   // mas reflejante arriba
+        glVertex3f(5.0f, WIN_Y1, WIN_Z1);
+        glVertex3f(5.0f, WIN_Y1, WIN_Z0);
+    glEnd();
+    glDepthMask(GL_TRUE);
+    glDisable(GL_BLEND);
+    glEnable(GL_LIGHTING);
+}
+
+// El librero de la pared derecha paso a la pared frontal para dejar sitio a la ventana
+void drawFrontBookshelf() {
+    glPushMatrix();
+        glTranslatef(1.25f, 0.0f, 3.68f);
+        glRotatef(90.0f, 0.0f, 1.0f, 0.0f);
+        glTranslatef(-4.7f, 0.0f, 0.0f);   // drawSideBookshelf dibuja en x = 4.7
+        drawSideBookshelf(1.0f, 0.0f);
+    glPopMatrix();
+}
+
+// ======================================================================
+//  CALLE EXTERIOR NEOFUTURISTA (se ve por la ventana)
+//  Lo estatico (cielo, calle, edificios) va en display lists;
+//  lo animado (autos flotantes, tren, holograma, balizas) se dibuja cada cuadro.
+// ======================================================================
+
+GLuint skyList = 0, cityList = 0;
+std::vector<Vec3> beacons;   // luces rojas en las azoteas mas altas
+
+// Pseudoaleatorio determinista: la ciudad sale igual en cada ejecucion
+float hash01(unsigned n) {
+    n = (n << 13) ^ n;
+    n = n * (n * n * 15731u + 789221u) + 1376312589u;
+    return (n & 0x7fffffffu) / 2147483647.0f;
+}
+
+// Caja sin iluminacion con sombreado falso por cara (la cara -X mira hacia la habitacion)
+void shadedBox(float x0, float y0, float z0, float x1, float y1, float z1, float r, float g, float b) {
+    glBegin(GL_QUADS);
+        glColor3f(r, g, b);
+        glVertex3f(x0, y0, z0); glVertex3f(x0, y0, z1); glVertex3f(x0, y1, z1); glVertex3f(x0, y1, z0);
+        glColor3f(r * 0.6f, g * 0.6f, b * 0.6f);
+        glVertex3f(x0, y0, z0); glVertex3f(x1, y0, z0); glVertex3f(x1, y1, z0); glVertex3f(x0, y1, z0);
+        glVertex3f(x0, y0, z1); glVertex3f(x0, y1, z1); glVertex3f(x1, y1, z1); glVertex3f(x1, y0, z1);
+        glColor3f(r * 1.3f, g * 1.3f, b * 1.3f);
+        glVertex3f(x0, y1, z0); glVertex3f(x0, y1, z1); glVertex3f(x1, y1, z1); glVertex3f(x1, y1, z0);
+        glColor3f(r * 0.4f, g * 0.4f, b * 0.4f);
+        glVertex3f(x1, y0, z0); glVertex3f(x1, y1, z0); glVertex3f(x1, y1, z1); glVertex3f(x1, y0, z1);
+    glEnd();
+}
+
+const float CITY_COLORS[4][3] = {
+    {0.2f, 0.9f, 1.0f}, {1.0f, 0.3f, 0.8f}, {1.0f, 0.8f, 0.35f}, {0.6f, 0.5f, 1.0f}
+};
+
+// Torre con ventanas encendidas al azar y, a veces, franjas de neon
+void buildTower(float x0, float z0, float x1, float z1, float top, unsigned seed, float litRatio) {
+    float s = 0.04f + 0.04f * hash01(seed);
+    shadedBox(x0, STREET_Y, z0, x1, top, z1, s, s, s + 0.04f);
+
+    glBegin(GL_QUADS);
+    for (float y = STREET_Y + 1.5f; y < top - 1.0f; y += 1.2f) {
+        for (float z = z0 + 0.4f; z + 0.8f < z1; z += 0.9f) {
+            unsigned h = seed * 7919u + (unsigned)((y + 100.0f) * 13.0f) * 31u + (unsigned)((z + 300.0f) * 17.0f);
+            if (hash01(h) > litRatio) continue;
+            const float* c = CITY_COLORS[(unsigned)(hash01(h + 1) * 4.0f) % 4];
+            float k = 0.35f + 0.65f * hash01(h + 2);
+            glColor3f(c[0] * k, c[1] * k, c[2] * k);
+            glVertex3f(x0 - 0.02f, y, z);
+            glVertex3f(x0 - 0.02f, y, z + 0.5f);
+            glVertex3f(x0 - 0.02f, y + 0.6f, z + 0.5f);
+            glVertex3f(x0 - 0.02f, y + 0.6f, z);
+        }
+    }
+    glEnd();
+
+    if (hash01(seed + 5) < 0.6f) {
+        const float* c = CITY_COLORS[(unsigned)(hash01(seed + 6) * 2.0f) % 2];   // cian o magenta
+        shadedBox(x0 - 0.06f, top - 0.25f, z0, x0, top, z1, c[0], c[1], c[2]);
+        shadedBox(x0 - 0.06f, STREET_Y, z0, x0, top, z0 + 0.08f, c[0], c[1], c[2]);
+        shadedBox(x0 - 0.06f, STREET_Y, z1 - 0.08f, x0, top, z1, c[0], c[1], c[2]);
+    }
+}
+
+void streetLamp(float x, float z, float dir) {
+    const float top = STREET_Y + 3.5f, armEnd = x + dir * 0.9f;
+    shadedBox(x - 0.05f, STREET_Y, z - 0.05f, x + 0.05f, top, z + 0.05f, 0.15f, 0.15f, 0.2f);
+    shadedBox(std::min(x, armEnd), top - 0.05f, z - 0.04f, std::max(x, armEnd), top + 0.03f, z + 0.04f,
+              0.15f, 0.15f, 0.2f);
+    shadedBox(armEnd - 0.2f, top - 0.12f, z - 0.12f, armEnd + 0.2f, top - 0.05f, z + 0.12f,
+              0.4f, 1.0f, 1.0f);
+}
+
+// Cielo: caja con degradado (horizonte magenta -> violeta -> azul noche), luna y estrellas
+void drawSky() {
+    const float X = 150.0f, Z = 200.0f;
+    const float yb[3] = { -30.0f, 40.0f, 160.0f };
+    const float col[3][3] = { {0.30f, 0.07f, 0.30f}, {0.10f, 0.04f, 0.20f}, {0.02f, 0.02f, 0.06f} };
+
+    glBegin(GL_QUADS);
+    for (int i = 0; i < 2; i++) {
+        glColor3fv(col[i]);     glVertex3f(X, yb[i], -Z);     glVertex3f(X, yb[i], Z);
+        glColor3fv(col[i + 1]); glVertex3f(X, yb[i + 1], Z);  glVertex3f(X, yb[i + 1], -Z);
+        for (int side = -1; side <= 1; side += 2) {
+            glColor3fv(col[i]);     glVertex3f(0.0f, yb[i], side * Z);     glVertex3f(X, yb[i], side * Z);
+            glColor3fv(col[i + 1]); glVertex3f(X, yb[i + 1], side * Z);    glVertex3f(0.0f, yb[i + 1], side * Z);
+        }
+    }
+    glColor3fv(col[2]);
+    glVertex3f(0.0f, yb[2], -Z); glVertex3f(X, yb[2], -Z); glVertex3f(X, yb[2], Z); glVertex3f(0.0f, yb[2], Z);
+    glEnd();
+
+    glColor3f(0.85f, 0.82f, 1.0f);
+    glPushMatrix();
+        glTranslatef(140.0f, 55.0f, 25.0f);
+        glutSolidSphere(6.0, 24, 24);
+    glPopMatrix();
+
+    glPointSize(2.0f);
+    glBegin(GL_POINTS);
+    for (unsigned i = 0; i < 80; i++) {
+        float b = 0.5f + 0.5f * hash01(i * 3 + 900);
+        glColor3f(b, b, b);
+        glVertex3f(148.0f, 35.0f + 110.0f * hash01(i * 3 + 901), -190.0f + 380.0f * hash01(i * 3 + 902));
+    }
+    glEnd();
+    glPointSize(1.0f);
+}
+
+void buildCity() {
+    skyList = glGenLists(1);
+    glNewList(skyList, GL_COMPILE);
+    drawSky();
+    glEndList();
+
+    cityList = glGenLists(1);
+    glNewList(cityList, GL_COMPILE);
+
+    // Veredas, pista (un poco mas baja) y suelo detras de las torres
+    shadedBox(4.9f,  STREET_Y - 0.4f, -200.0f, 8.5f,   STREET_Y,         200.0f, 0.10f, 0.10f, 0.14f);
+    shadedBox(8.5f,  STREET_Y - 0.4f, -200.0f, 18.5f,  STREET_Y - 0.15f, 200.0f, 0.03f, 0.03f, 0.06f);
+    shadedBox(18.5f, STREET_Y - 0.4f, -200.0f, 21.5f,  STREET_Y,         200.0f, 0.10f, 0.10f, 0.14f);
+    shadedBox(21.5f, STREET_Y - 0.4f, -200.0f, 150.0f, STREET_Y - 0.05f, 200.0f, 0.05f, 0.05f, 0.08f);
+
+    // Bordillos luminosos y linea central discontinua
+    shadedBox(8.45f,  STREET_Y - 0.15f, -200.0f, 8.55f,  STREET_Y + 0.02f, 200.0f, 0.2f, 0.9f, 1.0f);
+    shadedBox(18.45f, STREET_Y - 0.15f, -200.0f, 18.55f, STREET_Y + 0.02f, 200.0f, 1.0f, 0.3f, 0.8f);
+    for (float z = -200.0f; z < 200.0f; z += 4.0f)
+        shadedBox(13.45f, STREET_Y - 0.15f, z, 13.55f, STREET_Y - 0.13f, z + 2.0f, 0.9f, 0.9f, 1.0f);
+
+    for (float z = -96.0f; z <= 96.0f; z += 12.0f) {
+        streetLamp(8.1f, z, 1.0f);
+        streetLamp(18.9f, z + 6.0f, -1.0f);
+    }
+
+    // Via elevada del tren con sus pilares
+    const float railX = 19.6f, railY = STREET_Y + 13.0f;
+    shadedBox(railX - 0.3f, railY - 0.6f, -200.0f, railX + 0.3f, railY - 0.4f, 200.0f, 0.12f, 0.12f, 0.16f);
+    shadedBox(railX - 0.31f, railY - 0.63f, -200.0f, railX + 0.31f, railY - 0.6f, 200.0f, 0.2f, 0.9f, 1.0f);
+    for (float z = -180.0f; z <= 180.0f; z += 20.0f)
+        shadedBox(railX - 0.15f, STREET_Y, z - 0.15f, railX + 0.15f, railY - 0.6f, z + 0.15f, 0.1f, 0.1f, 0.13f);
+
+    // Torres al otro lado de la calle
+    float z = -96.0f;
+    for (unsigned i = 0; z < 96.0f; i++) {
+        float w  = 4.0f + 5.0f * hash01(i * 3 + 1);
+        float h  = 12.0f + 34.0f * hash01(i * 3 + 2);
+        if (z < 10.0f && z + w > -10.0f)
+            h = 6.0f + 6.0f * hash01(i * 3 + 2);   // bajas frente a la ventana para ver el skyline
+        float x0 = 21.8f + 1.5f * hash01(i * 3 + 3);
+        float top = STREET_Y + h;
+        buildTower(x0, z, x0 + 7.0f, z + w, top, i * 101 + 7, 0.55f);
+        if (h > 34.0f) {   // antena con baliza
+            float zc = z + w / 2;
+            shadedBox(x0 + 3.45f, top, zc - 0.05f, x0 + 3.55f, top + 2.0f, zc + 0.05f, 0.2f, 0.2f, 0.25f);
+            Vec3 b = { x0 + 3.5f, top + 2.0f, zc };
+            beacons.push_back(b);
+        }
+        z += w + 0.8f;
+    }
+
+    // Skyline lejano: mas alto y con menos luces (la niebla lo difumina)
+    z = -110.0f;
+    for (unsigned i = 0; z < 110.0f; i++) {
+        float w  = 6.0f + 8.0f * hash01(i * 5 + 11);
+        float h  = 30.0f + 50.0f * hash01(i * 5 + 12);
+        float x0 = 42.0f + 10.0f * hash01(i * 5 + 13);
+        buildTower(x0, z, x0 + 10.0f, z + w, STREET_Y + h, i * 211 + 3, 0.25f);
+        z += w + 1.5f;
+    }
+    glEndList();
+}
+
+struct Lane { float x, y, speed, offset, r, g, b; };
+
+// Carriles de autos flotantes: tres en el aire y dos sobre la pista
+const Lane LANES[5] = {
+    { 11.0f, 1.2f,            7.0f,  0.0f, 1.0f, 0.3f, 0.8f },
+    { 15.5f, 3.8f,           -9.0f, 20.0f, 0.2f, 0.9f, 1.0f },
+    { 13.0f, 7.0f,            5.0f, 50.0f, 1.0f, 0.8f, 0.3f },
+    { 10.5f, STREET_Y + 0.2f, 6.0f, 10.0f, 0.9f, 0.2f, 0.3f },
+    { 16.5f, STREET_Y + 0.2f,-7.5f, 35.0f, 0.3f, 0.6f, 1.0f }
+};
+
+void drawHoverCar(float x, float y, float z, float dir, const Lane& l) {
+    shadedBox(x - 0.35f, y - 0.12f, z - 0.9f, x + 0.35f, y + 0.12f, z + 0.9f, 0.12f, 0.12f, 0.16f);   // carroceria
+    shadedBox(x - 0.28f, y + 0.12f, z - 0.4f, x + 0.28f, y + 0.30f, z + 0.4f, 0.05f, 0.09f, 0.16f);   // cabina
+    shadedBox(x - 0.30f, y - 0.16f, z - 0.8f, x + 0.30f, y - 0.12f, z + 0.8f, l.r, l.g, l.b);         // luz inferior
+    float front = z + dir * 0.9f, back = z - dir * 0.9f;
+    shadedBox(x - 0.3f, y - 0.05f, front - 0.03f, x + 0.3f, y + 0.05f, front + 0.03f, 1.0f, 1.0f, 0.9f);
+    shadedBox(x - 0.3f, y - 0.05f, back - 0.03f,  x + 0.3f, y + 0.05f, back + 0.03f,  1.0f, 0.1f, 0.2f);
+}
+
+void drawTraffic() {
+    for (int i = 0; i < 5; i++) {
+        const Lane& l = LANES[i];
+        float dir = (l.speed > 0.0f) ? 1.0f : -1.0f;
+        for (int k = 0; k < 3; k++) {
+            float d = fmodf(animTime * fabsf(l.speed) + l.offset + k * 66.0f, 200.0f);
+            float z = (dir > 0.0f) ? -100.0f + d : 100.0f - d;
+            float bob = 0.05f * sinf(animTime * 2.0f + k + i);   // flotan suavemente
+            drawHoverCar(l.x, l.y + bob, z, dir, l);
+        }
+    }
+}
+
+// Tren maglev de 4 vagones que pasa cada ~22 s
+void drawTrain() {
+    const float x = 19.6f, y = STREET_Y + 13.0f;
+    float head = 200.0f - fmodf(animTime * 18.0f, 400.0f);
+    for (int i = 0; i < 4; i++) {
+        float z0 = head + i * 6.3f;
+        shadedBox(x - 0.6f, y - 0.35f, z0, x + 0.6f, y + 0.85f, z0 + 6.0f, 0.75f, 0.78f, 0.85f);
+        shadedBox(x - 0.62f, y + 0.25f, z0 + 0.3f, x - 0.6f, y + 0.6f, z0 + 5.7f, 0.3f, 0.95f, 1.0f);
+    }
+}
+
+void drawBeacons() {
+    if (fmodf(animTime, 1.6f) > 0.5f) return;   // parpadeo
+    glColor3f(1.0f, 0.15f, 0.15f);
+    for (size_t i = 0; i < beacons.size(); i++) {
+        glPushMatrix();
+            glTranslatef(beacons[i].x, beacons[i].y, beacons[i].z);
+            glutSolidSphere(0.18, 8, 8);
+        glPopMatrix();
+    }
+}
+
+void drawCity() {
+    glDisable(GL_LIGHTING);
+    glCallList(skyList);
+    glEnable(GL_FOG);   // la niebla da profundidad a la ciudad (el cielo no la usa)
+    glCallList(cityList);
+    drawTraffic();
+    drawTrain();
+    glDisable(GL_FOG);
+    drawBeacons();
+    glEnable(GL_LIGHTING);
+}
+
+// Holograma flotante frente a las torres (pasada transparente, mezcla aditiva)
+void drawHologram() {
+    const float x = 21.0f, yc = 6.0f, zc = 0.0f, hw = 4.5f, hh = 2.2f;
+    float g = sinf(animTime * 1.7f) * sinf(animTime * 11.0f);
+    float flicker = (g > 0.9f) ? 0.35f : 1.0f;   // falla ocasional de la proyeccion
+
+    glDisable(GL_LIGHTING);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+    glDepthMask(GL_FALSE);
+
+    float sy = yc + hh - fmodf(animTime * 1.5f, 2.0f * hh);   // linea de barrido que baja
+    glBegin(GL_QUADS);
+        glColor4f(1.0f, 0.2f, 0.8f, 0.22f * flicker);
+        glVertex3f(x, yc - hh, zc - hw);
+        glVertex3f(x, yc - hh, zc + hw);
+        glColor4f(0.2f, 0.8f, 1.0f, 0.22f * flicker);
+        glVertex3f(x, yc + hh, zc + hw);
+        glVertex3f(x, yc + hh, zc - hw);
+
+        glColor4f(0.6f, 1.0f, 1.0f, 0.35f * flicker);
+        glVertex3f(x - 0.01f, sy - 0.08f, zc - hw);
+        glVertex3f(x - 0.01f, sy - 0.08f, zc + hw);
+        glVertex3f(x - 0.01f, sy + 0.08f, zc + hw);
+        glVertex3f(x - 0.01f, sy + 0.08f, zc - hw);
+    glEnd();
+
+    glLineWidth(2.0f);
+    glColor4f(0.3f, 0.95f, 1.0f, 0.9f * flicker);
+    glBegin(GL_LINE_LOOP);
+        glVertex3f(x - 0.02f, yc - hh, zc - hw);
+        glVertex3f(x - 0.02f, yc - hh, zc + hw);
+        glVertex3f(x - 0.02f, yc + hh, zc + hw);
+        glVertex3f(x - 0.02f, yc + hh, zc - hw);
+    glEnd();
+
+    const char* text = "NEO CITY";
+    float len = (float)glutStrokeLength(GLUT_STROKE_ROMAN, (const unsigned char*)text);
+    float s = 6.5f / len;
+    glLineWidth(3.0f);
+    glColor4f(1.0f, 1.0f, 1.0f, 0.85f * flicker);
+    glPushMatrix();
+        glTranslatef(x - 0.03f, yc - 0.55f, zc - len * s / 2.0f);
+        glRotatef(-90.0f, 0.0f, 1.0f, 0.0f);   // el texto mira hacia la habitacion (-X)
+        glScalef(s, s, s);
+        for (const char* c = text; *c; c++)
+            glutStrokeCharacter(GLUT_STROKE_ROMAN, *c);
+    glPopMatrix();
+    glLineWidth(1.0f);
+
+    glDepthMask(GL_TRUE);
+    glDisable(GL_BLEND);
+    glEnable(GL_LIGHTING);
+}
+
+// ======================================================================
 //  LOGICA: interaccion, mision, silla y movimiento
 // ======================================================================
 
@@ -1145,6 +1546,7 @@ void interact() {
                 missionDone = true;
                 sprintf(buf, "SETUP COMPLETO en %.1f s! Trofeo desbloqueado", missionTime);
                 showMessage(buf, 1.0f, 0.85f, 0.2f);
+                playVictoryMusic();
             } else {
                 sprintf(buf, "Correcto! (%d/3)", missionStep);
                 showMessage(buf, 0.4f, 1.0f, 0.5f);
@@ -1173,6 +1575,7 @@ void resetMission() {
     missionTime = 0.0f;
     trophyAngle = 0.0f;
     showMessage("Mision reiniciada", 1.0f, 1.0f, 1.0f);
+    stopAllMusic();
 }
 
 void updateArrowLook(float dt) {
@@ -1221,6 +1624,14 @@ void update(float dt) {
     monitorLevel = approach(monitorLevel, monitorOn ? 1.0f : 0.0f, dt * 3.0f);
     neonLevel    = approach(neonLevel,    neonOn    ? 1.0f : 0.0f, dt * 2.0f);
     neonOnTime   = neonOn ? neonOnTime + dt : 0.0f;
+
+    // La musica del minijuego acompana al monitor: empieza al encenderlo y se corta al apagarlo
+    static bool lastMonitorOn = false;
+    if (monitorOn != lastMonitorOn) {
+        lastMonitorOn = monitorOn;
+        if (monitorOn) playGameMusic();
+        else           stopAllMusic();
+    }
     fanAngle     = fmodf(fanAngle + pcLevel * 900.0f * dt, 360.0f);
     if (missionDone) trophyAngle = fmodf(trophyAngle + 60.0f * dt, 360.0f);
 
@@ -1356,6 +1767,8 @@ void display() {
     setupLights();
 
     drawRoom();
+    drawWindowFrame();
+    drawCity();
     drawDoor();
     drawDesk();
     drawMonitor();
@@ -1368,7 +1781,7 @@ void display() {
 
     drawShelfBooks();
     drawSideBookshelf(-1.0f, 0.0f);   // izquierda
-    drawSideBookshelf( 1.0f, 0.0f);   // derecha
+    drawFrontBookshelf();
     drawPosters();
     drawSkate(-1.5f, 2.5f);
     drawWallSwitch();
@@ -1377,10 +1790,15 @@ void display() {
     beginGlow(neonPower());
     drawNeonEdges();
     drawNeonSign();
+    drawWindowNeon();
     endGlow();
 
     drawHighlight();
-    drawSpotlights();   // transparentes: van despues de lo opaco
+
+    // Transparentes despues de lo opaco, de lo mas lejano a lo mas cercano
+    drawHologram();
+    drawWindowGlass();
+    drawSpotlights();
     drawHUD();
 
     glutSwapBuffers();
@@ -1394,7 +1812,7 @@ void reshape(int w, int h) {
     glViewport(0, 0, w, h);
     glMatrixMode(GL_PROJECTION);
     glLoadIdentity();
-    gluPerspective(60.0f, ratio, 0.1f, 100.0f);
+    gluPerspective(60.0f, ratio, 0.1f, 400.0f);   // lejano para alcanzar el cielo exterior
     glMatrixMode(GL_MODELVIEW);
 }
 
@@ -1477,7 +1895,15 @@ void init() {
     glLightf(GL_LIGHT1, GL_QUADRATIC_ATTENUATION, 1.5f);
     glLightf(GL_LIGHT2, GL_LINEAR_ATTENUATION, 0.15f);
     glClearColor(0.08f, 0.08f, 0.12f, 1.0f);
+
+    GLfloat fogColor[] = { 0.20f, 0.06f, 0.25f, 1.0f };
+    glFogi(GL_FOG_MODE, GL_LINEAR);
+    glFogfv(GL_FOG_COLOR, fogColor);
+    glFogf(GL_FOG_START, 30.0f);
+    glFogf(GL_FOG_END, 140.0f);
+
     initNeonShader();
+    buildCity();
 }
 
 int main(int argc, char** argv) {
@@ -1486,8 +1912,13 @@ int main(int argc, char** argv) {
     glutInitWindowSize(1280, 720);
     glutCreateWindow("Gaming Room 3D - Dev C++ OpenGL");
 
+    std::string self(argv[0]);
+    size_t cut = self.find_last_of("\\/");
+    exeDir = (cut == std::string::npos) ? "" : self.substr(0, cut + 1);
+
     init();
-    loadTrophy(argv[0]);
+    loadTrophy();
+    initAudio();
 
     glutDisplayFunc(display);
     glutReshapeFunc(reshape);
